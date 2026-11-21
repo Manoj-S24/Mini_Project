@@ -8,12 +8,9 @@ class Camera:
         self.camera_index = camera_index
         self.width = width
         self.height = height
-
         self.cap = None
 
     def start(self):
-        """Initialize and open the webcam."""
-
         self.cap = cv2.VideoCapture(self.camera_index)
 
         if not self.cap.isOpened():
@@ -25,8 +22,6 @@ class Camera:
         print("Camera started successfully!")
 
     def read_frame(self):
-        """Capture and return one frame."""
-
         if self.cap is None or not self.cap.isOpened():
             return False, None
 
@@ -35,15 +30,22 @@ class Camera:
         if not success:
             return False, None
 
+        # Resize frame
+        frame = cv2.resize(frame, (self.width, self.height))
+
+        # Mirror the frame horizontally
+        frame = cv2.flip(frame, 1)
+
         return True, frame
 
-    def release(self):
-        """Release the webcam."""
+    def get_frame_dimensions(self, frame):
+        height, width, channels = frame.shape
+        return width, height, channels
 
+    def release(self):
         if self.cap is not None:
             self.cap.release()
             self.cap = None
 
         cv2.destroyAllWindows()
         print("Camera released.")
-
