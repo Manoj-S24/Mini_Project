@@ -1,0 +1,6 @@
+# Member 2 (hand tracking) dependencies.
+# Verified on Python 3.15; pin 3.10-3.12 if a wheel is missing for your version.
+mediapipe>=0.10.9,<0.11
+opencv-python>=4.8
+numpy>=1.24
+pytest>=7
