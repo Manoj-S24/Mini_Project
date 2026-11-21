@@ -24,6 +24,7 @@ class Camera:
             if self.cap.isOpened():
                 self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                self.cap.set(cv2.CAP_PROP_FPS, self.fps)
 
                 success, frame = self.cap.read()
 
@@ -54,13 +55,16 @@ class Camera:
             time.sleep(self.detection_interval)
 
 
-    def __init__(self, camera_index=0, width=640, height=480):
+    def __init__(self, camera_index=0, width=640, height=480, fps=30):
         self.max_retries = 5
         self.retry_delay = 2
         self.detection_interval = 5
         self.camera_index = camera_index
         self.width = width
         self.height = height
+        self.fps = fps
+        self.frame_interval = 1.0 / fps
+        self.last_frame_time = 0
 
         self.cap = None
         self.is_running = False
@@ -96,54 +100,67 @@ class Camera:
     
     def start(self):
         """Start camera or wait until one becomes available."""
-    
+
         while True:
             self.cap = cv2.VideoCapture(self.camera_index)
-    
+
             if self.cap.isOpened():
                 self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-    
+                self.cap.set(cv2.CAP_PROP_FPS, self.fps)
+
                 success, frame = self.cap.read()
-    
+
                 if success and frame is not None and frame.size > 0:
                     self.is_running = True
                     print(f"Camera {self.camera_index} started.")
                     return True
-    
+
             if self.cap is not None:
                 self.cap.release()
                 self.cap = None
-    
+
             print("Camera unavailable. Retrying in 5 seconds...")
             time.sleep(self.detection_interval)
-    
+
 
     
     
+   
     def read_frame(self):
-        """Capture frames and recover from camera failures."""
-
+        """Capture frames with FPS management and recovery."""
+    
         while self.is_running:
-
+        
             if self.cap is None:
                 if not self.reconnect():
                     self.wait_for_camera()
                 continue
-
+    
             success, frame = self.cap.read()
-
-            if success and frame is not None and frame.size > 0:
-                frame = cv2.resize(frame, (self.width, self.height))
-                frame = cv2.flip(frame, 1)
-                return True, frame
-
-            print("Camera disconnected!")
-
-            if not self.reconnect():
-                self.wait_for_camera()
-
+    
+            if not success or frame is None or frame.size == 0:
+                print("Camera disconnected!")
+    
+                if not self.reconnect():
+                    self.wait_for_camera()
+    
+                continue
+    
+            current_time = time.perf_counter()
+    
+            if current_time - self.last_frame_time < self.frame_interval:
+                continue
+    
+            self.last_frame_time = current_time
+    
+            frame = cv2.resize(frame, (self.width, self.height))
+            frame = cv2.flip(frame, 1)
+    
+            return True, frame
+    
         return False, None
+
 
 
     def get_screen_resolution(self):
