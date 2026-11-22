@@ -4,9 +4,9 @@ import time
 import ctypes
 from pathlib import Path
 import pyautogui
-
+import math
 from camera import Camera
-from hand_tracker import HandTracker
+from hand_tracker import HandTracker,select_hand
 
 
 # --------------------------------------------------
@@ -105,7 +105,11 @@ try:
     # --------------------------------------------------
     # 6. Main processing loop
     # --------------------------------------------------
+    # Pinch gesture configuration
+    PINCH_THRESHOLD = 0.05
+    RELEASE_THRESHOLD = 0.07
 
+    pinching = False
     while True:
 
         success, frame = camera.read_frame()
@@ -128,7 +132,40 @@ try:
 
         if hands:
 
-            hand = hands[0]
+            hand = select_hand(hands)
+                        # Get thumb and index fingertip coordinates
+            thumb_x, thumb_y = hand.landmarks[4][:2]
+            index_x, index_y = hand.landmarks[8][:2]
+
+            # Calculate distance between fingertips
+            distance = math.sqrt(
+                (index_x - thumb_x) ** 2 +
+                (index_y - thumb_y) ** 2
+            )
+
+           
+            # Detect pinch and trigger one click
+            if not pinching and distance < PINCH_THRESHOLD:
+                pinching = True
+
+                # One click when pinch starts
+                pyautogui.click(button="left")
+
+            elif pinching and distance > RELEASE_THRESHOLD:
+                pinching = False
+
+            gesture_text = "PINCH" if pinching else "RELEASE"
+
+            # Display gesture status
+            cv2.putText(
+                frame,
+                f"Gesture: {gesture_text}",
+                (20, 100),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 255, 0) if pinching else (255, 255, 255),
+                2
+            )
 
             # Index fingertip is landmark 8
             tip_x, tip_y = hand.index_tip_normalized()
@@ -203,6 +240,7 @@ try:
             )
         else:
             # Stop cursor updates and reset smoothing
+            pinching = False
             engine.reset_smoothing()
 
         # Step 10: Calculate FPS
