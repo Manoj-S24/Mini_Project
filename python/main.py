@@ -135,6 +135,7 @@ try:
 
             # Index fingertip is landmark 8
             tip_x, tip_y = hand.index_tip_normalized()
+            print(f"X: {tip_x:.4f} | Y: {tip_y:.4f}")
 
 
             # Prepare smoothed coordinates
@@ -152,6 +153,8 @@ try:
                 ctypes.byref(smooth_x),
                 ctypes.byref(smooth_y)
             )
+            engine.reset_smoothing.argtypes = []
+            engine.reset_smoothing.restype = None
 
 
             # Step 8: Map coordinates using C
@@ -171,11 +174,11 @@ try:
 
             # Step 9: Move Windows cursor
 
-            pyautogui.moveTo(
-                cursor_x.value,
-                cursor_y.value
-            )
+                # Keep cursor away from the four screen corners
+            safe_x = max(1, min(cursor_x.value, screen_width - 2))
+            safe_y = max(1, min(cursor_y.value, screen_height - 2))
 
+            pyautogui.moveTo(safe_x, safe_y)
 
             # Display mapped cursor coordinates
 
@@ -201,7 +204,9 @@ try:
                 (255, 0, 0),
                 2
             )
-
+        else:
+            # Stop cursor updates and reset smoothing
+            engine.reset_smoothing()
 
         # Step 10: Calculate FPS
 
