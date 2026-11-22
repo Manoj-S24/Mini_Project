@@ -9,6 +9,13 @@ from camera import Camera
 from hand_tracker import HandTracker,select_hand
 
 
+HOLD_THRESHOLD = 0.25  # 250 milliseconds
+
+pinching = False
+dragging = False
+pinch_start_time = 0.0
+
+
 # --------------------------------------------------
 # 1. Load C DLL
 # --------------------------------------------------
@@ -144,17 +151,39 @@ try:
             )
 
            
-            # Detect pinch and trigger one click
+            # Detect pinch and release
             if not pinching and distance < PINCH_THRESHOLD:
                 pinching = True
-
-                # One click when pinch starts
-                pyautogui.click(button="left")
+                dragging = False
+                pinch_start_time = time.perf_counter()
 
             elif pinching and distance > RELEASE_THRESHOLD:
+                # Pinch released
+                if dragging:
+                    pyautogui.mouseUp(button="left")
+                    dragging = False
+                else:
+                    # Short pinch: single click
+                    pyautogui.click(button="left")
+
                 pinching = False
 
-            gesture_text = "PINCH" if pinching else "RELEASE"
+            # Check whether pinch has been held long enough for dragging
+            if pinching and not dragging:
+                elapsed = time.perf_counter() - pinch_start_time
+
+                if elapsed >= HOLD_THRESHOLD:
+                    pyautogui.mouseDown(button="left")
+                    dragging = True
+
+            # Display gesture state
+            if dragging:
+                gesture_text = "DRAGGING"
+            elif pinching:
+                gesture_text = "PINCHING"
+            else:
+                gesture_text = "RELEASE"
+                
 
             # Display gesture status
             cv2.putText(
@@ -242,6 +271,12 @@ try:
             # Stop cursor updates and reset smoothing
             pinching = False
             engine.reset_smoothing()
+            if dragging:
+                pyautogui.mouseUp(button="left")
+
+            pinching = False
+            dragging = False
+            engine.reset_smoothing()
 
         # Step 10: Calculate FPS
 
@@ -302,7 +337,7 @@ finally:
 
     if camera is not None:
         camera.release()
-
+    pyautogui.mouseUp(button="left")
     cv2.destroyAllWindows()
 
     print("Application closed.")
