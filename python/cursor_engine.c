@@ -1,12 +1,11 @@
 
 #include <stdio.h>
+#include <math.h>
 
 /*
     Convert normalized hand coordinates
     into screen pixel coordinates.
 */
-
-
 void map_to_screen(
     float x,
     float y,
@@ -38,8 +37,21 @@ void map_to_screen(
     *screen_y = (int)(y * (screen_height - 1));
 }
 
+/*
+    Dead-zone filtering and Exponential Moving Average (EMA)
+*/
+
+// Dead-zone thresholds
+#define DEAD_ZONE_X 0.004f
+#define DEAD_ZONE_Y 0.004f
+
+// EMA state
 static float smooth_x = -1.0f;
 static float smooth_y = -1.0f;
+
+// Last accepted raw coordinates
+static float accepted_x = -1.0f;
+static float accepted_y = -1.0f;
 
 void smooth_coordinates(
     float x,
@@ -54,14 +66,44 @@ void smooth_coordinates(
     {
         smooth_x = x;
         smooth_y = y;
+
+        accepted_x = x;
+        accepted_y = y;
     }
     else
     {
-        smooth_x = alpha * x + (1.0f - alpha) * smooth_x;
-        smooth_y = alpha * y + (1.0f - alpha) * smooth_y;
+        // Accept X movement only when it exceeds the dead zone
+        if (fabsf(x - accepted_x) > DEAD_ZONE_X)
+        {
+            accepted_x = x;
+        }
+
+        // Accept Y movement only when it exceeds the dead zone
+        if (fabsf(y - accepted_y) > DEAD_ZONE_Y)
+        {
+            accepted_y = y;
+        }
+
+        // Apply EMA smoothing
+        smooth_x = alpha * accepted_x
+                 + (1.0f - alpha) * smooth_x;
+
+        smooth_y = alpha * accepted_y
+                 + (1.0f - alpha) * smooth_y;
     }
 
     *output_x = smooth_x;
     *output_y = smooth_y;
 }
 
+/*
+    Reset smoothing state when hand tracking is lost.
+*/
+void reset_smoothing(void)
+{
+    smooth_x = -1.0f;
+    smooth_y = -1.0f;
+
+    accepted_x = -1.0f;
+    accepted_y = -1.0f;
+}
