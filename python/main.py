@@ -2,17 +2,29 @@
 import cv2
 import time
 import ctypes
-from pathlib import Path
+import math
 import pyautogui
 
+from pathlib import Path
 from camera import Camera
-from hand_tracker import HandTracker
+from hand_tracker import HandTracker, select_hand
 
-<<<<<<< HEAD
-=======
 
 # --------------------------------------------------
-# 1. Load C DLL
+# 1. Gesture configuration
+# --------------------------------------------------
+
+HOLD_THRESHOLD = 0.25       # 250 milliseconds
+PINCH_THRESHOLD = 0.05
+RELEASE_THRESHOLD = 0.07
+
+pinching = False
+dragging = False
+pinch_start_time = 0.0
+
+
+# --------------------------------------------------
+# 2. Load C DLL
 # --------------------------------------------------
 
 dll_path = Path(__file__).resolve().parent / "cursor_engine.dll"
@@ -20,7 +32,7 @@ engine = ctypes.CDLL(str(dll_path))
 
 
 # --------------------------------------------------
-# 2. Configure C coordinate mapping function
+# 3. Configure C coordinate mapping function
 # --------------------------------------------------
 
 engine.map_to_screen.argtypes = [
@@ -36,7 +48,7 @@ engine.map_to_screen.restype = None
 
 
 # --------------------------------------------------
-# 3. Configure C smoothing function
+# 4. Configure C smoothing function
 # --------------------------------------------------
 
 engine.smooth_coordinates.argtypes = [
@@ -51,7 +63,15 @@ engine.smooth_coordinates.restype = None
 
 
 # --------------------------------------------------
-# 4. Get actual screen resolution
+# 5. Configure C smoothing reset function
+# --------------------------------------------------
+
+engine.reset_smoothing.argtypes = []
+engine.reset_smoothing.restype = None
+
+
+# --------------------------------------------------
+# 6. Get actual screen resolution
 # --------------------------------------------------
 
 screen_width, screen_height = pyautogui.size()
@@ -60,10 +80,9 @@ print(f"Screen resolution: {screen_width}x{screen_height}")
 
 
 # --------------------------------------------------
-# 5. Initialize application variables
+# 7. Initialize application variables
 # --------------------------------------------------
 
->>>>>>> origin/test
 camera = None
 tracker = None
 
@@ -106,7 +125,7 @@ try:
 
 
     # --------------------------------------------------
-    # 6. Main processing loop
+    # 8. Main processing loop
     # --------------------------------------------------
 
     while True:
@@ -117,34 +136,114 @@ try:
             continue
 
 
-        # Step 4: Detect hand
+        # Step 1: Detect hand
 
         hands = tracker.process(frame)
 
 
-        # Step 5: Draw hand landmarks
+        # Step 2: Draw hand landmarks
 
         tracker.draw(frame, hands)
 
 
-        # Step 6: Process index fingertip
+        # Step 3: Process detected hand
 
         if hands:
 
-            hand = hands[0]
+            hand = select_hand(hands)
 
-            # Index fingertip is landmark 8
+            # Get thumb and index fingertip coordinates
+
+            thumb_x, thumb_y = hand.landmarks[4][:2]
+            index_x, index_y = hand.landmarks[8][:2]
+
+
+            # Calculate distance between fingertips
+
+            distance = math.sqrt(
+                (index_x - thumb_x) ** 2 +
+                (index_y - thumb_y) ** 2
+            )
+
+
+            # Step 4: Detect pinch and release
+
+            if not pinching and distance < PINCH_THRESHOLD:
+
+                pinching = True
+                dragging = False
+                pinch_start_time = time.perf_counter()
+
+
+            elif pinching and distance > RELEASE_THRESHOLD:
+
+                # Pinch released
+
+                if dragging:
+
+                    # Stop dragging
+
+                    pyautogui.mouseUp(button="left")
+                    dragging = False
+
+                else:
+
+                    # Short pinch: single click
+
+                    pyautogui.click(button="left")
+
+                pinching = False
+
+
+            # Step 5: Detect hold-to-drag
+
+            if pinching and not dragging:
+
+                elapsed = time.perf_counter() - pinch_start_time
+
+                if elapsed >= HOLD_THRESHOLD:
+
+                    pyautogui.mouseDown(button="left")
+                    dragging = True
+
+
+            # Step 6: Display gesture state
+
+            if dragging:
+                gesture_text = "DRAGGING"
+
+            elif pinching:
+                gesture_text = "PINCHING"
+
+            else:
+                gesture_text = "RELEASE"
+
+
+            cv2.putText(
+                frame,
+                f"Gesture: {gesture_text}",
+                (20, 100),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 255, 0) if pinching else (255, 255, 255),
+                2
+            )
+
+
+            # Step 7: Get index fingertip coordinates
+
             tip_x, tip_y = hand.index_tip_normalized()
+
             print(f"X: {tip_x:.4f} | Y: {tip_y:.4f}")
 
 
-            # Prepare smoothed coordinates
+            # Step 8: Prepare smoothed coordinates
 
             smooth_x = ctypes.c_float()
             smooth_y = ctypes.c_float()
 
 
-            # Step 7: Apply C smoothing
+            # Step 9: Apply C smoothing
 
             engine.smooth_coordinates(
                 ctypes.c_float(tip_x),
@@ -153,11 +252,9 @@ try:
                 ctypes.byref(smooth_x),
                 ctypes.byref(smooth_y)
             )
-            engine.reset_smoothing.argtypes = []
-            engine.reset_smoothing.restype = None
 
 
-            # Step 8: Map coordinates using C
+            # Step 10: Map coordinates using C
 
             cursor_x = ctypes.c_int()
             cursor_y = ctypes.c_int()
@@ -172,15 +269,17 @@ try:
             )
 
 
-            # Step 9: Move Windows cursor
+            # Step 11: Move Windows cursor
 
-                # Keep cursor away from the four screen corners
+            # Keep cursor away from the four screen corners
+
             safe_x = max(1, min(cursor_x.value, screen_width - 2))
             safe_y = max(1, min(cursor_y.value, screen_height - 2))
 
             pyautogui.moveTo(safe_x, safe_y)
 
-            # Display mapped cursor coordinates
+
+            # Step 12: Display mapped cursor coordinates
 
             cv2.putText(
                 frame,
@@ -193,7 +292,7 @@ try:
             )
 
 
-            # Display fingertip coordinates
+            # Step 13: Display fingertip coordinates
 
             cv2.putText(
                 frame,
@@ -204,11 +303,26 @@ try:
                 (255, 0, 0),
                 2
             )
+
+
         else:
-            # Stop cursor updates and reset smoothing
+
+            # Stop dragging if hand tracking is lost
+
+            if dragging:
+                pyautogui.mouseUp(button="left")
+
+            # Reset gesture states
+
+            pinching = False
+            dragging = False
+
+            # Reset C cursor smoothing
+
             engine.reset_smoothing()
 
-        # Step 10: Calculate FPS
+
+        # Step 14: Calculate FPS
 
         current_time = time.perf_counter()
 
@@ -220,7 +334,7 @@ try:
         previous_time = current_time
 
 
-        # Step 11: Display FPS
+        # Step 15: Display FPS
 
         cv2.putText(
             frame,
@@ -233,7 +347,7 @@ try:
         )
 
 
-        # Step 12: Display detected hand count
+        # Step 16: Display detected hand count
 
         cv2.putText(
             frame,
@@ -246,12 +360,14 @@ try:
         )
 
 
-        # Step 13: Display camera window
+        # Step 17: Display camera window
 
         cv2.imshow("Universal Gesture Pointer", frame)
 
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        # Quit application when Q is pressed
+
+        if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
 
@@ -262,11 +378,24 @@ except Exception as error:
 
 finally:
 
+    # Release mouse button when application closes
+
+    pyautogui.mouseUp(button="left")
+
+
+    # Close hand tracker
+
     if tracker is not None:
         tracker.close()
 
+
+    # Release camera
+
     if camera is not None:
         camera.release()
+
+
+    # Close OpenCV windows
 
     cv2.destroyAllWindows()
 
