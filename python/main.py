@@ -7,9 +7,42 @@ import pyautogui
 import math
 from camera import Camera
 from hand_tracker import HandTracker,select_hand
+from gesture_recognizer import GestureRecognizer
 
 
 HOLD_THRESHOLD = 0.25  # 250 milliseconds
+# Windows horizontal scroll configuration
+WHEEL_DELTA = 120
+SCROLL_SPEED = 200
+MOUSEEVENTF_HWHEEL = 0x1000
+
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+user32.mouse_event.argtypes = [
+    ctypes.c_uint,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_uint,
+    ctypes.c_size_t
+]
+
+user32.mouse_event.restype = None
+
+
+def horizontal_scroll(direction):
+    delta = (
+    WHEEL_DELTA * SCROLL_SPEED
+    if direction == "RIGHT"
+    else -WHEEL_DELTA * SCROLL_SPEED
+)
+
+    user32.mouse_event(
+        MOUSEEVENTF_HWHEEL,
+        0,
+        0,
+        ctypes.c_uint(delta).value,
+        0
+    )
 
 pinching = False
 dragging = False
@@ -70,8 +103,9 @@ print(f"Screen resolution: {screen_width}x{screen_height}")
 
 camera = None
 tracker = None
+recognizer = GestureRecognizer()
 
-alpha = 0.5
+alpha = 0.8
 
 
 try:
@@ -135,148 +169,182 @@ try:
         tracker.draw(frame, hands)
 
 
-        # Step 6: Process index fingertip
+        
+        # Step 6: Process detected hand
 
         if hands:
 
             hand = select_hand(hands)
-                        # Get thumb and index fingertip coordinates
-            thumb_x, thumb_y = hand.landmarks[4][:2]
-            index_x, index_y = hand.landmarks[8][:2]
 
-            # Calculate distance between fingertips
-            distance = math.sqrt(
-                (index_x - thumb_x) ** 2 +
-                (index_y - thumb_y) ** 2
-            )
+            # Step 6.1: Recognize current gesture
+            result = recognizer.process(hand)
+            gesture = result.gesture
 
-           
-            # Detect pinch and release
-            if not pinching and distance < PINCH_THRESHOLD:
-                pinching = True
-                dragging = False
-                pinch_start_time = time.perf_counter()
+            # Step 6.2: Process scrolling
+            if gesture == "SCROLL_MODE":
 
-            elif pinching and distance > RELEASE_THRESHOLD:
-                # Pinch released
+                # End any active drag when entering scroll mode
                 if dragging:
                     pyautogui.mouseUp(button="left")
-                    dragging = False
-                else:
-                    # Short pinch: single click
-                    pyautogui.click(button="left")
 
+                dragging = False
                 pinching = False
 
-            # Check whether pinch has been held long enough for dragging
-            if pinching and not dragging:
-                elapsed = time.perf_counter() - pinch_start_time
+                direction = result.scroll_direction
 
-                if elapsed >= HOLD_THRESHOLD:
-                    pyautogui.mouseDown(button="left")
-                    dragging = True
+                if direction == "UP":
+                    pyautogui.scroll(SCROLL_SPEED)
 
-            # Display gesture state
+                elif direction == "DOWN":
+                    pyautogui.scroll(-SCROLL_SPEED)
+
+                elif direction in ("LEFT", "RIGHT"):
+                    horizontal_scroll(direction)
+
+            else:
+
+                # Step 6.3: Detect pinch
+                thumb_x, thumb_y = hand.landmarks[4][:2]
+                index_x, index_y = hand.landmarks[8][:2]
+
+                distance = math.sqrt(
+                    (index_x - thumb_x) ** 2 +
+                    (index_y - thumb_y) ** 2
+                )
+
+                if not pinching and distance < PINCH_THRESHOLD:
+                    pinching = True
+                    dragging = False
+                    pinch_start_time = time.perf_counter()
+
+                elif pinching and distance > RELEASE_THRESHOLD:
+
+                    if dragging:
+                        pyautogui.mouseUp(button="left")
+                        dragging = False
+
+                    else:
+                        pyautogui.click(button="left")
+
+                    pinching = False
+
+                # Step 6.4: Detect drag
+                if pinching and not dragging:
+
+                    elapsed = time.perf_counter() - pinch_start_time
+
+                    if elapsed >= HOLD_THRESHOLD:
+                        pyautogui.mouseDown(button="left")
+                        dragging = True
+
+            # Step 6.5: Display current status
+
             if dragging:
                 gesture_text = "DRAGGING"
             elif pinching:
                 gesture_text = "PINCHING"
             else:
-                gesture_text = "RELEASE"
-                
+                gesture_text = gesture
 
-            # Display gesture status
             cv2.putText(
                 frame,
                 f"Gesture: {gesture_text}",
                 (20, 100),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.8,
-                (0, 255, 0) if pinching else (255, 255, 255),
+                (0, 255, 0),
                 2
             )
 
-            # Index fingertip is landmark 8
-            tip_x, tip_y = hand.index_tip_normalized()
-            print(f"X: {tip_x:.4f} | Y: {tip_y:.4f}")
+            if gesture == "SCROLL_MODE":
 
+                cv2.putText(
+                    frame,
+                    f"Scroll: {result.scroll_direction}",
+                    (20, 135),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (255, 255, 0),
+                    2
+                )
 
-            # Prepare smoothed coordinates
+            # Step 6.6: Move cursor only in MOVE mode
+            # Also allow movement while pinching or dragging.
 
-            smooth_x = ctypes.c_float()
-            smooth_y = ctypes.c_float()
+            if gesture == "MOVE" or pinching or dragging:
 
+                tip_x, tip_y = hand.index_tip_normalized()
 
-            # Step 7: Apply C smoothing
+                smooth_x = ctypes.c_float()
+                smooth_y = ctypes.c_float()
 
-            engine.smooth_coordinates(
-                ctypes.c_float(tip_x),
-                ctypes.c_float(tip_y),
-                ctypes.c_float(alpha),
-                ctypes.byref(smooth_x),
-                ctypes.byref(smooth_y)
-            )
-            engine.reset_smoothing.argtypes = []
-            engine.reset_smoothing.restype = None
+                engine.smooth_coordinates(
+                    ctypes.c_float(tip_x),
+                    ctypes.c_float(tip_y),
+                    ctypes.c_float(alpha),
+                    ctypes.byref(smooth_x),
+                    ctypes.byref(smooth_y)
+                )
 
+                cursor_x = ctypes.c_int()
+                cursor_y = ctypes.c_int()
 
-            # Step 8: Map coordinates using C
+                engine.map_to_screen(
+                    smooth_x.value,
+                    smooth_y.value,
+                    screen_width,
+                    screen_height,
+                    ctypes.byref(cursor_x),
+                    ctypes.byref(cursor_y)
+                )
 
-            cursor_x = ctypes.c_int()
-            cursor_y = ctypes.c_int()
+                safe_x = max(
+                    1,
+                    min(cursor_x.value, screen_width - 2)
+                )
 
-            engine.map_to_screen(
-                smooth_x.value,
-                smooth_y.value,
-                screen_width,
-                screen_height,
-                ctypes.byref(cursor_x),
-                ctypes.byref(cursor_y)
-            )
+                safe_y = max(
+                    1,
+                    min(cursor_y.value, screen_height - 2)
+                )
 
+                pyautogui.moveTo(safe_x, safe_y)
 
-            # Step 9: Move Windows cursor
+                cv2.putText(
+                    frame,
+                    f"Cursor: ({cursor_x.value}, {cursor_y.value})",
+                    (20, 170),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 0, 0),
+                    2
+                )
 
-                # Keep cursor away from the four screen corners
-            safe_x = max(1, min(cursor_x.value, screen_width - 2))
-            safe_y = max(1, min(cursor_y.value, screen_height - 2))
+                cv2.putText(
+                    frame,
+                    f"Tip: ({tip_x:.2f}, {tip_y:.2f})",
+                    (20, 200),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 0, 0),
+                    2
+                )
 
-            pyautogui.moveTo(safe_x, safe_y)
+            else:
+                engine.reset_smoothing()
 
-            # Display mapped cursor coordinates
-
-            cv2.putText(
-                frame,
-                f"Cursor: ({cursor_x.value}, {cursor_y.value})",
-                (10, 90),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (255, 0, 0),
-                2
-            )
-
-
-            # Display fingertip coordinates
-
-            cv2.putText(
-                frame,
-                f"Tip: ({tip_x:.2f}, {tip_y:.2f})",
-                (10, 120),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (255, 0, 0),
-                2
-            )
         else:
-            # Stop cursor updates and reset smoothing
-            pinching = False
-            engine.reset_smoothing()
+
+            # No hand detected
             if dragging:
                 pyautogui.mouseUp(button="left")
 
             pinching = False
             dragging = False
+
+            recognizer.reset()
             engine.reset_smoothing()
+
 
         # Step 10: Calculate FPS
 
