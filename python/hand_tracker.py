@@ -156,8 +156,54 @@ class _FrameClock:
         return timestamp
 
 
+_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
+    "hand_landmarker/float16/1/hand_landmarker.task"
+)
+
+
+def _alternate_model_paths() -> list[Path]:
+    """Other places the model usually lives, for projects that keep
+    hand_tracker.py in the same folder as main.py (flat layout) or that are
+    started from a different working directory."""
+    return [
+        Path(__file__).resolve().parent / "models" / MODEL_PATH.name,
+        Path.cwd() / "models" / MODEL_PATH.name,
+    ]
+
+
+def _resolve_model_path(model_path: str | Path) -> Path:
+    """Return an existing model file, or raise FileNotFoundError.
+
+    An explicitly passed path is used exactly as given. Only the default
+    MODEL_PATH falls back to the alternate locations above.
+    """
+    model_path = Path(model_path)
+    if model_path.is_file():
+        return model_path
+
+    also_looked: list[Path] = []
+    if model_path == MODEL_PATH:
+        for candidate in _alternate_model_paths():
+            if candidate.is_file():
+                return candidate
+            if candidate != model_path and candidate not in also_looked:
+                also_looked.append(candidate)
+
+    message = (
+        f"Hand landmarker model not found: {model_path}\n"
+        "Download it with:\n"
+        "  curl -L -o models/hand_landmarker.task " + _MODEL_URL
+    )
+    if also_looked:
+        message += "\nAlso looked in:\n" + "\n".join(f"  {p}" for p in also_looked)
+    raise FileNotFoundError(message)
+
+
 class HandTracker:
     """MediaPipe Hand Landmarker wrapper with drawing helpers."""
+
+    _closed = False
 
     def __init__(
         self,
@@ -168,20 +214,18 @@ class HandTracker:
         min_tracking_confidence: float = 0.5,
         mirrored: bool = False,
     ):
-        model_path = Path(model_path)
-        if not model_path.is_file():
-            raise FileNotFoundError(
-                f"Hand landmarker model not found: {model_path}\n"
-                "Download it with:\n"
-                "  curl -L -o models/hand_landmarker.task "
-                "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
-                "hand_landmarker/float16/1/hand_landmarker.task"
-            )
+        model_path = _resolve_model_path(model_path)
 
         # Imported here so the module (and its tests) load without MediaPipe.
-        import mediapipe as mp
-        from mediapipe.tasks import python as mp_python
-        from mediapipe.tasks.python import vision
+        try:
+            import mediapipe as mp
+            from mediapipe.tasks import python as mp_python
+            from mediapipe.tasks.python import vision
+        except ImportError as exc:
+            raise ImportError(
+                "MediaPipe (Tasks API) is required. Install or upgrade it with:\n"
+                "  pip install -U mediapipe"
+            ) from exc
 
         self._mp = mp
         self._landmarker = vision.HandLandmarker.create_from_options(
@@ -201,6 +245,9 @@ class HandTracker:
         """Detect hands in a BGR frame. Returns [] when tracking is lost."""
         if frame_bgr is None or frame_bgr.size == 0:
             raise ValueError("process() needs a non-empty BGR frame")
+
+        if self._closed:
+            raise RuntimeError("HandTracker is closed")
 
         channels = 1 if frame_bgr.ndim == 2 else frame_bgr.shape[2]
         if channels == 1:
@@ -269,6 +316,11 @@ class HandTracker:
         return frame_bgr
 
     def close(self) -> None:
+        """Release the MediaPipe model. Safe to call more than once."""
+        if self._closed:
+            return
+
+        self._closed = True
         self._landmarker.close()
 
     def __enter__(self) -> "HandTracker":
